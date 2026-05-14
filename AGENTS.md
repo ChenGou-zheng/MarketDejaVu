@@ -72,7 +72,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ### 数据获取
 
 - 本项目使用 RQSDK 进行开发, 当提到金融相关问题，需要获取金融数据时务必使用rqdata获取，`docs\ricequant-doc-index.md` 文件中有相关说明。无法Fetch文档时，请用curl命令行工具获取文档。不要通过websearch等方式获取文档。
-- 如果有数据 rqdata 无法提供或者不满足要求, 考虑 akshare, 需要的数据源定义从 `https://akshare.akfamily.xyz/data/index.html` 获取, 不要使用 websearch 方式获取文档或者是数据.
+- 不使用 AKshare, 数据不稳定.
 
 ### 项目规范
 

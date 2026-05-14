@@ -287,6 +287,62 @@ def fetch_sentiment_proxy(force: bool = False) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════
+#  ETF 日行情 (rqdatac)
+# ═══════════════════════════════════════════
+ETF_UNIVERSE = [
+    ("510300.XSHG", "沪深300ETF"),
+    ("510500.XSHG", "中证500ETF"),
+    ("159915.XSHE", "创业板ETF"),
+    ("510050.XSHG", "上证50ETF"),
+    ("512100.XSHG", "中证1000ETF"),
+    ("588000.XSHG", "科创50ETF"),
+    ("510880.XSHG", "红利ETF"),
+    ("512880.XSHG", "证券ETF"),
+    ("512690.XSHG", "酒ETF"),
+    ("512200.XSHG", "房地产ETF"),
+    ("518880.XSHG", "黄金ETF"),
+    ("513100.XSHG", "纳指ETF"),
+    ("513050.XSHG", "中概互联ETF"),
+]
+
+
+def fetch_etf_prices(force: bool = False) -> pd.DataFrame:
+    name = "etf_prices"
+    p = _path(name)
+    if not force and p.exists():
+        df = pd.read_parquet(p)
+        print(f"[SKIP] {name} (cached, {len(df)} rows, {len(df.columns)} cols)")
+        return df
+
+    import rqdatac
+    rqdatac.init()
+
+    dfs = []
+    for code, label in ETF_UNIVERSE:
+        try:
+            df = rqdatac.get_price(code, start_date=START_DATE, end_date=END_DATE,
+                                   fields=["close", "volume"], adjust_type="none")
+            if isinstance(df.index, pd.MultiIndex):
+                df.index = df.index.get_level_values(-1)
+            df = df.rename(columns={"close": f"{label}_close", "volume": f"{label}_volume"})
+            df.index = pd.to_datetime(df.index)
+            df.index.name = None
+            dfs.append(df)
+            print(f"  [OK] {label} ({code}): {len(df)} rows")
+        except Exception as e:
+            print(f"  [WARN] {label} ({code}): {e}")
+
+    if not dfs:
+        print(f"[FAIL] {name}: no ETF data fetched")
+        return pd.DataFrame()
+
+    merged = pd.concat(dfs, axis=1).sort_index()
+    _save(name, merged)
+    print(f"[OK] {name}: {len(merged)} rows, {len(merged.columns)} cols")
+    return merged
+
+
+# ═══════════════════════════════════════════
 #  主入口
 # ═══════════════════════════════════════════
 def fetch_all(force: bool = False) -> dict:
@@ -299,6 +355,7 @@ def fetch_all(force: bool = False) -> dict:
         ("macro", fetch_macro),
         ("sw_industry", fetch_sw_industry),
         ("sentiment", fetch_sentiment_proxy),
+        ("etf_prices", fetch_etf_prices),
     ]
     results = {}
     for label, func in steps:
