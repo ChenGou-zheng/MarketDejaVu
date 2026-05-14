@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual Environment
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# uv
+uv.lock
+
+# Output (generated data, figures, etc.)
+output/
+
+# Data (large generated files)
+data/external/
+data/processed/
+
+# docs
+notebooks/
+
+# agent
