@@ -76,7 +76,7 @@ def main():
     lines.append(l1)
 
     d, v = cum_excess(h20)
-    (l2,) = ax.plot(d, v, color=COLORS["h20_baseline"], linewidth=1.0, linestyle="--", label="v2.4 基线 (H=20)")
+    (l2,) = ax.plot(d, v, color=COLORS["h20_baseline"], linewidth=1.0, linestyle="--", label="v2.4 Baseline (H=20)")
     lines.append(l2)
 
     # equal weight non-MTM
@@ -89,7 +89,7 @@ def main():
         color=COLORS["equal_weight"],
         linewidth=0.8,
         linestyle=":",
-        label="等权非MTM策略",
+        label="Equal-weight Non-MTM",
     )
     lines.append(l3)
 
@@ -102,7 +102,7 @@ def main():
         color=COLORS["best_single"],
         linewidth=0.9,
         linestyle="-.",
-        label="动量轮动 (单一最佳)",
+        label="Momentum (Best Single)",
     )
     lines.append(l4)
 
