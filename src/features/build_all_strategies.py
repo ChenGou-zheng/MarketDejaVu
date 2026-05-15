@@ -58,7 +58,22 @@ def main():
         code = str(row["rqdata_code"]).strip()
 
         if stype == "mtm":
-            continue  # handled by build_snapshot.py MTM rebuild
+            # MTM strategies: NAVs are built by rebuild_mtm_nav.py
+            # Just check if NAV file exists for registry
+            safe = key.replace("/", "_")
+            nav_path = NAV_DIR / f"{safe}_nav.csv"
+            nav_entries.append({
+                "strategy_key": key,
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "trading_days": row["trading_days"],
+                "total_return": row["total_return"],
+                "annual_vol": row["annual_vol"],
+                "max_drawdown": row["max_drawdown"],
+                "source_files": 0,
+            })
+            existing_keys.add(key)
+            continue
 
         if not code:
             print(f"  [SKIP] {key}: no code")
@@ -105,48 +120,8 @@ def main():
         cache.to_parquet(EXTERNAL_STRATEGY)
         print(f"\n[OK] Cached {len(combined_prices)} price series")
 
-    # Rebuild registry from definition file + MTM
-    # For each definition, check if NAV file exists
-    reg_rows = []
-    for _, row in definitions.iterrows():
-        key = row["strategy_key"]
-        safe = key.replace("/", "_")
-        nav_path = NAV_DIR / f"{safe}_nav.csv"
-
-        if key.startswith("交易记录"):
-            # MTM strategies: check existing registry
-            m = existing[existing["strategy_key"] == key]
-            if not m.empty:
-                reg_rows.append(m.iloc[0].to_dict())
-            continue
-
-        if not nav_path.exists():
-            continue
-
-        nav_df = pd.read_csv(nav_path, nrows=1)
-        if nav_df.empty:
-            continue
-        # Get date range from NAV file
-        nav_full = pd.read_csv(nav_path, parse_dates=["trade_date"])
-        start = nav_full["trade_date"].min()
-        end = nav_full["trade_date"].max()
-        days = len(nav_full)
-        total_ret = float(nav_full["nav"].iloc[-1] / nav_full["nav"].iloc[0] - 1)
-        ann_vol = float(nav_full["daily_return"].std() * (252 ** 0.5)) if nav_full["daily_return"].std() > 0 else 0.0
-        max_dd = float((1 - nav_full["nav"] / nav_full["nav"].cummax()).min())
-
-        reg_rows.append({
-            "strategy_key": key,
-            "start_date": str(start.date()),
-            "end_date": str(end.date()),
-            "trading_days": days,
-            "total_return": total_ret,
-            "annual_vol": ann_vol,
-            "max_drawdown": max_dd,
-            "source_files": 0,
-        })
-
-    reg_df = pd.DataFrame(reg_rows)
+    # Build registry from nav_entries (includes ETF, mapped, and MTM)
+    reg_df = pd.DataFrame(nav_entries)
     reg_df.to_csv(REGISTRY_PATH, index=False, encoding="utf-8-sig")
     print(f"[OK] Registry: {len(reg_df)} strategies from {DEFINITIONS_PATH}")
 

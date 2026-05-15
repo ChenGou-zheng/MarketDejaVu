@@ -224,7 +224,7 @@ def main():
             print(f"  {key:30s}  SKIP (no viable NAV source or < {MIN_TRADING_DAYS} days)")
             continue
 
-        # Check for extreme daily returns
+        # Quality filter
         ret = daily_df["daily_return"].dropna()
         extreme_rate = (ret.abs() > 0.2).mean()
         ann_vol = ret.std() * np.sqrt(252)
@@ -249,10 +249,10 @@ def main():
             print(f"  {key:30s}  SKIP (only {n_valid} valid labels)")
             continue
 
-        # Clip excess returns to [-3, 3] to limit outlier impact
+        # Clip excess returns to [-3, 3]
         excess = excess.clip(-3.0, 3.0)
 
-        # Also filter out strategies where > 5% of excess returns are at the clip bound
+        # Filter out strategies where > 5% of excess returns are at the clip bound
         clipped_rate = ((excess == 3.0) | (excess == -3.0)).mean()
         if clipped_rate > 0.05:
             print(f"  {key:30s}  SKIP ({clipped_rate:.1%} at clip bound)")
