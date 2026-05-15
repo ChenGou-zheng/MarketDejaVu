@@ -343,6 +343,52 @@ def fetch_etf_prices(force: bool = False) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════
+#  个股日行情 (rqdatac, 用于 MTM 净值重建)
+# ═══════════════════════════════════════════
+STOCK_START = "2020-01-01"
+
+def fetch_stock_prices(force: bool = False) -> pd.DataFrame:
+    name = "stock_prices"
+    p = _path(name)
+    if not force and p.exists():
+        df = pd.read_parquet(p)
+        print(f"[SKIP] {name} (cached, {len(df)} rows, {len(df.columns)} cols)")
+        return df
+
+    import json, rqdatac
+    rqdatac.init()
+
+    codes_path = PROJECT_ROOT / "data" / "external" / "stock_codes.json"
+    if not codes_path.exists():
+        print(f"[FAIL] stock_codes.json not found. Run extract step first.")
+        return pd.DataFrame()
+
+    with open(codes_path) as f:
+        codes = json.load(f)
+
+    print(f"Fetching {len(codes)} stocks from {STOCK_START} to {END_DATE}...")
+
+    # rqdata returns long-format with MultiIndex (order_book_id, date)
+    try:
+        raw = rqdatac.get_price(codes, start_date=STOCK_START, end_date=END_DATE,
+                                fields=["close"], adjust_type="none")
+    except Exception as e:
+        print(f"[FAIL] {name}: {e}")
+        return pd.DataFrame()
+
+    # Convert long format → wide format: columns = stock codes, index = date
+    close = raw["close"].unstack(level=0)
+    close.index = pd.to_datetime(close.index)
+    close.index.name = None
+
+    _save(name, close)
+    print(f"[OK] {name}: {len(close)} days, {len(close.columns)} stocks")
+    print(f"  Range: {close.index[0].date()} ~ {close.index[-1].date()}")
+    print(f"  Avg NaN rate per stock: {close.isna().sum(axis=1).mean():.0f} stocks/day")
+    return close
+
+
+# ═══════════════════════════════════════════
 #  主入口
 # ═══════════════════════════════════════════
 def fetch_all(force: bool = False) -> dict:

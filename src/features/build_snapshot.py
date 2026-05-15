@@ -200,24 +200,25 @@ def main():
         key = row["strategy_key"]
         safe = key.replace("/", "_").replace("\\", "_")
 
-        # Try: MTM rebuild from raw trade CSV (original strategies)
-        daily_df = rebuild_daily_returns(key)
+        # Try: pre-computed NAV file (rqdata-based MTM or ETF strategies)
+        daily_df = None
+        nav_precomputed = NAV_DIR / f"{safe}_nav.csv"
+        if nav_precomputed.exists():
+            try:
+                raw_nav = pd.read_csv(nav_precomputed)
+                if "trade_date" in raw_nav.columns and "nav" in raw_nav.columns:
+                    raw_nav["trade_date"] = pd.to_datetime(raw_nav["trade_date"])
+                    daily_df = raw_nav[["trade_date", "nav"]].copy()
+                    if "daily_return" not in raw_nav.columns:
+                        daily_df["daily_return"] = daily_df["nav"].pct_change()
+                    else:
+                        daily_df["daily_return"] = raw_nav["daily_return"]
+            except Exception:
+                pass
 
-        # Fall back: pre-computed NAV file (ETF/sector synthetic strategies)
+        # Fall back: old MTM rebuild from raw trade CSV (no pre-computed NAV)
         if daily_df is None:
-            nav_precomputed = NAV_DIR / f"{safe}_nav.csv"
-            if nav_precomputed.exists():
-                try:
-                    raw_nav = pd.read_csv(nav_precomputed)
-                    if "trade_date" in raw_nav.columns and "nav" in raw_nav.columns:
-                        raw_nav["trade_date"] = pd.to_datetime(raw_nav["trade_date"])
-                        daily_df = raw_nav[["trade_date", "nav"]].copy()
-                        if "daily_return" not in raw_nav.columns:
-                            daily_df["daily_return"] = daily_df["nav"].pct_change()
-                        else:
-                            daily_df["daily_return"] = raw_nav["daily_return"]
-                except Exception:
-                    pass
+            daily_df = rebuild_daily_returns(key)
 
         if daily_df is None or len(daily_df) < MIN_TRADING_DAYS:
             print(f"  {key:30s}  SKIP (no viable NAV source or < {MIN_TRADING_DAYS} days)")
