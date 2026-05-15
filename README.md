@@ -317,34 +317,115 @@ MTM_MAX_CLIPPED_FRACTION = 0.05       # 被裁剪的超额占比上限 (5%)
 
 ---
 
-## 核心文件
+## 复现指南
 
-```
-docs/strategy_definitions.csv          # 唯一策略索引 (63 条)
-src/data/fetcher.py                    # rqdata 数据拉取 (指数/ETF/个股)
-src/features/rebuild_mtm_nav.py        # MTM 净值重建 (rqdata 收盘价)
-src/features/build_all_strategies.py   # 策略 NAV 构建
-src/features/build_snapshot.py         # 无泄露特征+标签库
-src/models/similarity_engine.py        # KNN + t 检验 + BH-FDR
-src/backtest/dynamic_backtest.py       # N=20 块回测 + Top-K 分散
-```
-
----
-
-## 快速复现
+### 完整管线 (从原始数据到结果)
 
 ```bash
+# 0. 环境
 pip install uv && uv sync
-uv run python src/data/fetcher.py                               # 拉取数据
-uv run python src/data/preprocess.py                            # 日频对齐
 
-# 提取股票代码 + 拉取个股行情 (首次)
-uv run python -c "..."                                          # 见上文完整命令
+# 1. 拉取 ETF/指数行情 (首次, 后续缓存)
+uv run python src/data/fetcher.py
+
+# 2. 日频数据整合
+uv run python src/data/preprocess.py
+
+# 3. 提取持仓股票代码清单 (仅首次, 用于 MTM 净值重建)
+uv run python -c "
+from pathlib import Path; import pandas as pd, json
+codes = set()
+for f in Path('data/processed').glob('交易记录*.csv'):
+    df = pd.read_csv(f)
+    if 'symbol' not in df.columns: continue
+    for s in df['symbol'].dropna().unique():
+        s = str(s).strip()
+        if s and '以上は' not in s: codes.add(s)
+rq = [c.replace('SHSE.','')+'.XSHG' if c.startswith('SHSE.') else c.replace('SZSE.','')+'.XSHE' for c in codes]
+rq = [c for c in rq if not c.startswith(('900','200'))]
+with open('data/external/stock_codes.json','w') as f: json.dump(rq, f)
+print(f'{len(rq)} stock codes')
+"
+
+# 4. 拉取个股日行情 (仅首次, 后续缓存)
 uv run python -c "from src.data.fetcher import fetch_stock_prices; fetch_stock_prices()"
 
-uv run python src/features/rebuild_mtm_nav.py                   # MTM 重建
-uv run python src/features/build_all_strategies.py              # ETF + 映射
-uv run python src/features/build_snapshot.py                    # 特征+标签
-uv run python src/models/similarity_engine.py                   # KNN + FDR
-uv run python src/backtest/dynamic_backtest.py --top-k 3        # 回测
+# 5. MTM 净值重建 (rqdata 收盘价, 含间隙检查+质量过滤)
+uv run python src/features/rebuild_mtm_nav.py
+
+# 6. 构建 ETF/映射策略 NAV
+uv run python src/features/build_all_strategies.py
+
+# 7. 无泄露特征+标签库
+uv run python src/features/build_snapshot.py
+
+# 8. KNN 相似度匹配 + FDR 检验
+uv run python src/models/similarity_engine.py
+
+# 9. 动态回测 (推荐: K=3)
+uv run python src/backtest/dynamic_backtest.py --top-k 3
 ```
+
+### 对照组复现
+
+#### 1. 质量过滤开关
+
+在 `src/features/build_snapshot.py` 顶部修改常量:
+
+```python
+MTM_FILTER_ENABLED = True    # True = 过滤 ON (推荐), False = 过滤 OFF
+MTM_MAX_EXTREME_RATE = 0.03  # 日收益 >±20% 天数比例上限
+MTM_MAX_ANN_VOL = 5.0        # 年化波动率上限 (500%)
+```
+
+**过滤 ON**: 31 MTM → 质量过滤 → ~10 个可信策略 → +24.44% 年化, DSR 显著
+**过滤 OFF**: 31 MTM 全用 → 含 ~20 个高噪声策略(vol 200%~1367%) → +259.72% 年化(虚假)
+
+#### 2. 策略池对照 (MTM vs 全池)
+
+```bash
+# MTM 池: 只保留 MTM 策略
+uv run python -c "
+import pandas as pd; from pathlib import Path
+NAV_DIR = Path('data/processed/strategy_nav')
+rows = [{'strategy_key':f.stem.replace('_nav',''),'source_type':'mtm',
+         'trading_days':len(pd.read_csv(f))} for f in sorted(NAV_DIR.glob('交易记录*_nav.csv'))]
+pd.DataFrame(rows).to_csv('data/processed/def_mtm.csv', index=False)
+"
+cp data/processed/def_mtm.csv docs/strategy_definitions.csv
+uv run python src/features/build_snapshot.py
+uv run python src/models/similarity_engine.py
+uv run python src/backtest/dynamic_backtest.py --top-k 3
+
+# 全池: 还原完整策略
+git checkout HEAD -- docs/strategy_definitions.csv
+uv run python src/features/build_snapshot.py
+uv run python src/models/similarity_engine.py
+uv run python src/backtest/dynamic_backtest.py --top-k 3
+```
+
+#### 3. Top-K 分散度对比
+
+```bash
+uv run python src/backtest/dynamic_backtest.py --top-k 1   # 单策略
+uv run python src/backtest/dynamic_backtest.py --top-k 3   # 推荐: 3 策略等权
+uv run python src/backtest/dynamic_backtest.py --top-k 5   # 过度分散
+```
+
+#### 4. 距离度量对比
+
+```bash
+uv run python src/models/similarity_engine.py --dist euclidean    # 加权欧氏 (默认)
+uv run python src/models/similarity_engine.py --dist mahalanobis  # 马氏距离 (结果等同)
+```
+
+### 输出文件
+
+| 路径 | 内容 |
+|------|------|
+| `output/tables/similarity_decisions.csv` | 2630 日 × 策略的显著性判定 |
+| `output/tables/similarity_summary.csv` | 每日汇总统计数据 |
+| `output/tables/backtest_knn_k3.csv` | 日频回测净值 (K=3) |
+| `output/tables/backtest_knn_k1.csv` | 日频回测净值 (K=1) |
+| `data/processed/snapshot/features.parquet` | 2670×16 特征矩阵 |
+| `data/processed/snapshot/labels.parquet` | 策略 N=20 超额标签 |
