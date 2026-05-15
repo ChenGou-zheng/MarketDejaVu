@@ -23,6 +23,8 @@ uv.lock
 output/
 
 # Data (large generated files)
+data/external/
+data/processed/
 
 # docs
 notebooks/
