@@ -87,12 +87,19 @@ def benjamini_hochberg(p_values: np.ndarray, q: float = FDR_Q) -> np.ndarray:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dist", choices=["euclidean", "mahalanobis"], default="euclidean")
+    args = parser.parse_args()
+    use_mahalanobis = args.dist == "mahalanobis"
+
     # — load snapshot —
     features = pd.read_parquet(SNAPSHOT_DIR / "features.parquet")
     labels = pd.read_parquet(SNAPSHOT_DIR / "labels.parquet")
 
     print(f"Features: {features.shape}, Labels: {labels.shape}  ({features.index[0].date()} ~ {features.index[-1].date()})")
     print(f"Strategies: {list(labels.columns)}")
+    print(f"Distance: {'Mahalanobis' if use_mahalanobis else 'Weighted Euclidean'}")
 
     pos = pd.Series(range(len(features)), index=features.index)
     weights = np.array([FEATURE_WEIGHTS.get(c, 1.0) for c in features.columns])
@@ -129,9 +136,20 @@ def main():
         F_std = ((F_avail - mu) / sigma).values  # (n_avail, d)
         f_t = ((features.loc[t] - mu) / sigma).values  # (d,)
 
-        # — weighted Euclidean distance —
-        diff = F_std - f_t  # (n_avail, d)
-        dist = np.sqrt((diff ** 2 * weights).sum(axis=1))
+        # — distance metric —
+        if use_mahalanobis:
+            # Mahalanobis: D² = (x-y)ᵀ Σ⁻¹ (x-y)
+            cov = np.cov(F_std.T)
+            try:
+                inv_cov = np.linalg.inv(cov)
+            except np.linalg.LinAlgError:
+                inv_cov = np.linalg.pinv(cov)
+            diff = F_std - f_t
+            dist = np.sqrt(np.sum((diff @ inv_cov) * diff, axis=1))
+        else:
+            # Weighted Euclidean
+            diff = F_std - f_t
+            dist = np.sqrt((diff ** 2 * weights).sum(axis=1))
 
         # — select K nearest —
         if n_avail < K:
