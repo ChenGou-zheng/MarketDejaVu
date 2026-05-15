@@ -1,13 +1,8 @@
 """
-Dynamic backtest: KNN + walk-forward strategy quality filter.
+Dynamic backtest with top-K diversification.
 
-For each block:
-  1. Get all significant strategies from similarity engine
-  2. Filter to strategies with WR >= MIN_WR over last MIN_SELECTIONS blocks
-  3. Pick best by predicted mean_excess
-  4. Hold for N days, record outcome, update track
-
-The quality filter prevents KNN from selecting strategies that failed historically.
+Selects top-K significant strategies (by mean_excess) and equal-weights them.
+Reduces volatility vs single-strategy approach.
 """
 
 from __future__ import annotations
@@ -49,13 +44,14 @@ def compute_dsr(excess_ret: pd.Series, n_trials: int) -> dict:
 def main():
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--top-k", type=int, default=1)
     parser.add_argument("--quality-filter", action="store_true")
     args = parser.parse_args()
+    top_k = args.top_k
     qf = args.quality_filter
 
-    print(f"=== Backtest with{'' if qf else 'out'} quality filter ===")
+    print(f"=== Backtest top_k={top_k} quality_filter={'ON' if qf else 'OFF'} ===")
 
-    # Load all significant decisions (not just best)
     dec = pd.read_csv(OUT_DIR / "similarity_decisions.csv", parse_dates=["decision_date"])
     sig_dec = dec[dec["is_significant"]].copy()
 
@@ -70,47 +66,45 @@ def main():
     all_dates = daily_ret.index.intersection(hs300_ret.index)
     all_dates = all_dates[all_dates >= sig_dec["decision_date"].min()]
 
-    # Walk-forward strategy track record
     track = defaultdict(lambda: {"selections": 0, "wins": 0})
 
     portfolio_nav = [1.0]
     portfolio_ret, excess_ret_list = [], []
     daily_records = []
-    current_strategy = None
+    current_strategies: list[str] = []
     days_since = 0
+
+    def _eligible(s):
+        t = track.get(s, {"selections": 0, "wins": 0})
+        return t["selections"] < MIN_SELECTIONS or t["wins"] / t["selections"] >= MIN_WR
 
     for d_idx, date in enumerate(all_dates):
         if days_since == 0:
-            # Find at most recent decision
             recent = sig_dec[sig_dec["decision_date"] <= date]
             if recent.empty:
-                current_strategy = None
+                current_strategies = []
             else:
                 latest_dt = recent["decision_date"].max()
-                candidates = recent[recent["decision_date"] == latest_dt]
+                candidates = recent[recent["decision_date"] == latest_dt].copy()
 
                 if qf:
-                    # Filter by track record: WR >= MIN_WR after MIN_SELECTIONS
-                    def _eligible(s):
-                        t = track.get(s, {"selections": 0, "wins": 0})
-                        return t["selections"] < MIN_SELECTIONS or t["wins"] / t["selections"] >= MIN_WR
-
                     eligible = candidates[candidates["strategy"].apply(_eligible)]
-                    if not eligible.empty:
-                        best_row = eligible.loc[eligible["mean_excess"].idxmax()]
-                        current_strategy = best_row["strategy"]
-                    else:
-                        # Fallback: pick best overall even if ineligible
-                        best_row = candidates.loc[candidates["mean_excess"].idxmax()]
-                        current_strategy = best_row["strategy"]
+                    if eligible.empty:
+                        eligible = candidates
                 else:
-                    best_row = candidates.loc[candidates["mean_excess"].idxmax()]
-                    current_strategy = best_row["strategy"]
+                    eligible = candidates
 
-        # Compute returns
-        if current_strategy is not None and current_strategy in daily_ret.columns:
-            sr = daily_ret.loc[date, current_strategy]
-            daily_ret_val = sr if pd.notna(sr) else hs300_ret.loc[date]
+                eligible = eligible.sort_values("mean_excess", ascending=False)
+                current_strategies = eligible["strategy"].head(top_k).tolist()
+
+        # Compute portfolio return: equal-weighted across selected strategies
+        if current_strategies:
+            rets = []
+            for s in current_strategies:
+                if s in daily_ret.columns:
+                    sr = daily_ret.loc[date, s]
+                    rets.append(sr if pd.notna(sr) else hs300_ret.loc[date])
+            daily_ret_val = np.mean(rets) if rets else hs300_ret.loc[date]
         else:
             daily_ret_val = hs300_ret.loc[date]
 
@@ -124,21 +118,21 @@ def main():
             "portfolio_return": daily_ret_val,
             "benchmark_return": bench_ret,
             "excess_return": excess,
-            "selected_strategy": current_strategy or "BENCH",
+            "n_strategies": len(current_strategies),
+            "strategies": "|".join(current_strategies) if current_strategies else "BENCH",
             "portfolio_nav": portfolio_nav[-1],
         })
         days_since = (days_since + 1) % N
 
-        # At end of block, update track record
-        if days_since == 0 and current_strategy is not None:
+        if days_since == 0 and current_strategies:
             block_excess = pd.Series(excess_ret_list[-N:]).sum()
-            track[current_strategy]["selections"] += 1
-            if block_excess > 0:
-                track[current_strategy]["wins"] += 1
+            for s in current_strategies:
+                track[s]["selections"] += 1
+                if block_excess > 0:
+                    track[s]["wins"] += 1
 
     result = pd.DataFrame(daily_records)
 
-    # — metrics —
     es = pd.Series(excess_ret_list)
     total = (1 + es).prod() - 1
     ann = (1 + total) ** (252 / len(es)) - 1
@@ -155,7 +149,7 @@ def main():
     split = pd.Timestamp("2024-01-01")
 
     print(f"\n{'='*65}")
-    print(f"  Backtest (quality_filter={'ON' if qf else 'OFF'})")
+    print(f"  Backtest top_k={top_k} qf={'ON' if qf else 'OFF'}")
     print(f"{'='*65}")
     print(f"  Days:      {len(result)}")
     print(f"  Ann ex:    {ann:+.2%}")
@@ -172,20 +166,19 @@ def main():
         e = sub["excess_return"]
         t = (1 + e).prod() - 1
         a = (1 + t) ** (252 / len(e)) - 1
-        sub["bid"] = sub.index // N
-        bw2 = (sub.groupby("bid")["excess_return"].apply(lambda x: (1 + x).prod() - 1) > 0).mean()
+        sub2 = sub.copy()
+        sub2["bid"] = sub2.index // N
+        bw2 = (sub2.groupby("bid")["excess_return"].apply(lambda x: (1 + x).prod() - 1) > 0).mean()
         print(f"  {label:18s}  ann={a:+.2%}  daily_WR={(e>0).mean():.1%}  block_WR={bw2:.1%}")
 
-    tag = f"knn_qf_{'on' if qf else 'off'}"
+    tag = f"knn_k{top_k}{'_qf' if qf else ''}"
     result.to_csv(OUT_DIR / f"backtest_{tag}.csv", index=False, encoding="utf-8-sig")
     print(f"\n[DONE] backtest_{tag}.csv")
-
-    # Track record summary
-    print(f"\n  Strategy track records ({sum(1 for t in track.values() if t['selections']>=MIN_SELECTIONS and t['wins']/t['selections']>=MIN_WR)}/{len(track)} eligible):")
-    for s, t in sorted(track.items(), key=lambda x: -x[1]["selections"]):
+    print(f"\n  Top strategies by block WR:")
+    for s, t in sorted(track.items(), key=lambda x: -x[1]["selections"])[:15]:
         w = t["wins"] / t["selections"] if t["selections"] > 0 else 0
         el = "E" if (t["selections"] >= MIN_SELECTIONS and w >= MIN_WR) else ("-" if t["selections"] >= MIN_SELECTIONS else "?")
-        print(f"    {el} {s:30s}  sel={t['selections']:3d}  WR={w:.0%}")
+        print(f"    {el} {s:35s}  sel={t['selections']:3d}  WR={w:.0%}")
 
 
 if __name__ == "__main__":
