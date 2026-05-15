@@ -31,6 +31,48 @@ OUT_DIR = PROCESSED_DIR / "snapshot"
 N = 20
 MIN_TRADING_DAYS = 60
 
+# ── Quality filter thresholds ──
+# MTM filter: excludes strategies with unrealistic daily return patterns
+MTM_FILTER_ENABLED = True             # set False to disable all MTM checks
+MTM_MAX_EXTREME_RATE = 0.03           # max fraction of days with |return| > 20%
+MTM_MAX_ANN_VOL = 5.0                 # max annualized volatility (500%)
+MTM_EXCESS_CLIP_BOUND = 3.0           # N-day excess return clip limit (±300%)
+MTM_MAX_CLIPPED_FRACTION = 0.05       # max fraction of clipped excess returns
+
+
+def check_mtm_quality(daily_returns: pd.Series) -> tuple[bool, str]:
+    """Check if a strategy's daily returns pass the MTM quality filter.
+    
+    Returns (pass: bool, reason: str) where reason is empty if passed.
+    """
+    if not MTM_FILTER_ENABLED:
+        return True, ""
+
+    ret = daily_returns.dropna()
+    if len(ret) < 10:
+        return False, "insufficient data"
+
+    extreme_rate = (ret.abs() > 0.2).mean()
+    ann_vol = ret.std() * np.sqrt(252)
+    if extreme_rate > MTM_MAX_EXTREME_RATE or ann_vol > MTM_MAX_ANN_VOL:
+        return False, f"extreme_rate={extreme_rate:.1%} ann_vol={ann_vol:.0%}"
+    return True, ""
+
+
+def check_clip_quality(excess_returns: pd.Series) -> tuple[bool, str]:
+    """Check if excess returns are excessively clipped (too noisy).
+    
+    Returns (pass: bool, reason: str).
+    """
+    if not MTM_FILTER_ENABLED:
+        return True, ""
+
+    clipped = ((excess_returns == MTM_EXCESS_CLIP_BOUND) |
+               (excess_returns == -MTM_EXCESS_CLIP_BOUND)).mean()
+    if clipped > MTM_MAX_CLIPPED_FRACTION:
+        return False, f"{clipped:.1%} at clip bound"
+    return True, ""
+
 
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     close = df["HS300_close"]
@@ -224,12 +266,13 @@ def main():
             print(f"  {key:30s}  SKIP (no viable NAV source or < {MIN_TRADING_DAYS} days)")
             continue
 
-        # Quality filter (disabled for all-MTM test)
+        # ── MTM quality filter (configurable via constants at top) ──
         ret = daily_df["daily_return"].dropna()
         extreme_rate = (ret.abs() > 0.2).mean()
         ann_vol = ret.std() * np.sqrt(252)
-        if extreme_rate > 0.03 or ann_vol > 5.0:
-            print(f"  {key:30s}  SKIP (extreme_rate={extreme_rate:.1%} ann_vol={ann_vol:.0%})")
+        ok, reason = check_mtm_quality(ret)
+        if not ok:
+            print(f"  {key:30s}  SKIP ({reason})")
             continue
 
         # NAV to unified date index
@@ -249,13 +292,13 @@ def main():
             print(f"  {key:30s}  SKIP (only {n_valid} valid labels)")
             continue
 
-        # Clip excess returns to [-3, 3]
-        excess = excess.clip(-3.0, 3.0)
+        # Clip excess returns to [-MTM_EXCESS_CLIP_BOUND, MTM_EXCESS_CLIP_BOUND]
+        excess = excess.clip(-MTM_EXCESS_CLIP_BOUND, MTM_EXCESS_CLIP_BOUND)
 
-        # Filter out strategies where > 5% of excess returns are at the clip bound
-        clipped_rate = ((excess == 3.0) | (excess == -3.0)).mean()
-        if clipped_rate > 0.05:
-            print(f"  {key:30s}  SKIP ({clipped_rate:.1%} at clip bound)")
+        # Clip-bound quality check
+        ok_clip, reason_clip = check_clip_quality(excess)
+        if not ok_clip:
+            print(f"  {key:30s}  SKIP ({reason_clip})")
             continue
 
         excess_list.append(excess)

@@ -227,6 +227,25 @@ dynamic_backtest.py             N=20 块持有 + Top-K 分散    output/tables/b
 | rqdata MTM 重建 | 11 | 原始交易 CSV + 个股收盘价 | ✓ 通过质量过滤 |
 | 原始 CSV 失败 | 26 | 原始交易 CSV | ✗ 日收益波动 >±20% |
 
+### MTM 质量过滤
+
+定义在 `src/features/build_snapshot.py` 顶部, 可通过常量控制:
+
+```python
+MTM_FILTER_ENABLED = True             # False = 跳过所有过滤
+MTM_MAX_EXTREME_RATE = 0.03           # 单日收益 >±20% 的天数比例上限 (3%)
+MTM_MAX_ANN_VOL = 5.0                 # 年化波动率上限 (500%)
+MTM_EXCESS_CLIP_BOUND = 3.0           # N=20 日超额裁剪限 (±300%)
+MTM_MAX_CLIPPED_FRACTION = 0.05       # 被裁剪的超额占比上限 (5%)
+```
+
+过滤逻辑有两个关卡:
+
+1. **日收益检查** (`check_mtm_quality`): 剔除日收益频繁 ±20% 的不可靠策略
+2. **超额裁剪检查** (`check_clip_quality`): 剔除超额频繁触及 ±300% 边界的策略(如 交易记录食品因 5.8% 的超额在边界被过滤)
+
+**禁用过滤**: 设 `MTM_FILTER_ENABLED = False`, 所有 37 个 MTM 策略进入系统。注意: 部分策略日收益波动仍在 ±20% 以上, 禁用后块胜率可能下降至 44%(见 37 纯 MTM 测试)。
+
 ### MTM 失败原因
 
 37 个原始 CSV 全部用 rqdata 个股收盘价成功重建 NAV。26 个未通过质量过滤, 核心原因:
