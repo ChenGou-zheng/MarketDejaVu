@@ -224,7 +224,7 @@ def main():
             print(f"  {key:30s}  SKIP (no viable NAV source or < {MIN_TRADING_DAYS} days)")
             continue
 
-        # Quality filter
+        # Quality filter (disabled for all-MTM test)
         ret = daily_df["daily_return"].dropna()
         extreme_rate = (ret.abs() > 0.2).mean()
         ann_vol = ret.std() * np.sqrt(252)

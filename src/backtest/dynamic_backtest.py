@@ -103,7 +103,8 @@ def main():
             for s in current_strategies:
                 if s in daily_ret.columns:
                     sr = daily_ret.loc[date, s]
-                    rets.append(sr if pd.notna(sr) else hs300_ret.loc[date])
+                    sr = sr if pd.notna(sr) else hs300_ret.loc[date]
+                    rets.append(sr)
             daily_ret_val = np.mean(rets) if rets else hs300_ret.loc[date]
         else:
             daily_ret_val = hs300_ret.loc[date]
