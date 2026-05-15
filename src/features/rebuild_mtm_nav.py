@@ -180,17 +180,17 @@ def main():
             print(f"SKIP (MTM failed or < {MIN_DAYS} days)")
             continue
 
-        # Quality filter
+        # ALWAYS save the corrected NAV (overwrite old broken files)
+        out_path = NAV_DIR / f"{key}_nav.csv"
+        nav_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+
+        # Quality filter (registry only, NAV files already saved)
         ret = nav_df["daily_return"].dropna()
         extreme_rate = (ret.abs() > 0.2).mean()
         ann_vol = ret.std() * np.sqrt(252)
         if extreme_rate > 0.03 or ann_vol > 5.0:
             print(f"SKIP (extreme={extreme_rate:.1%}, vol={ann_vol:.0%})")
             continue
-
-        # Save NAV CSV
-        out_path = NAV_DIR / f"{key}_nav.csv"
-        nav_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
         total_return = float(nav_df["nav"].iloc[-1] / nav_df["nav"].iloc[0] - 1)
         max_dd = float((1 - nav_df["nav"] / nav_df["nav"].cummax()).min())
