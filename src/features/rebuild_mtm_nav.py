@@ -28,6 +28,7 @@ REGISTRY_PATH = PROCESSED_DIR / "strategy_registry.csv"
 DEFINITIONS_PATH = PROJECT_ROOT / "docs" / "strategy_definitions.csv"
 
 MIN_DAYS = 60
+MAX_CAPITAL_TRADE_GAP = 30  # days; if > 30, CSV is incomplete (missing trades)
 
 
 def to_rqdata(symbol: str) -> str:
@@ -69,16 +70,30 @@ def rebuild_mtm_nav(strategy_key: str, stock_prices: pd.DataFrame) -> pd.DataFra
 
     # Determine initial capital from first 银证转入
     initial_capital = None
+    capital_time = None
     for _, row in raw.iterrows():
         if str(row["btype"]) == "银证转入":
             try:
                 initial_capital = float(row["cash_balance"])
+                capital_time = pd.to_datetime(row["trade_time"])
             except (ValueError, TypeError):
                 initial_capital = 0
             break
 
     if initial_capital is None or initial_capital <= 0:
         return None
+
+    # Check gap between initial capital and first trade
+    if capital_time is not None:
+        for _, row in raw.iterrows():
+            if str(row.get("btype", "")) == "银证转入":
+                continue
+            if pd.notna(row.get("trade_time")):
+                first_trade_time = pd.to_datetime(row["trade_time"])
+                gap = (first_trade_time - capital_time).days
+                if gap > MAX_CAPITAL_TRADE_GAP:
+                    return None  # CSV is missing intermediate trades
+                break
 
     # Track positions per stock: {rqcode: shares}
     positions: dict[str, float] = defaultdict(float)

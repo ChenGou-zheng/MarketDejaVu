@@ -15,7 +15,6 @@ All computations use only data available at time t — no future leakage.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -120,97 +119,6 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     return F.ffill().bfill().dropna()
 
 
-def rebuild_daily_returns(strategy_key: str) -> pd.DataFrame | None:
-    """Rebuild daily equity curve using mark-to-market position tracking.
-
-    Reads raw CSV rows chronologically, tracks per-symbol positions,
-    marks positions to the most recent fill price, and computes daily equity.
-    """
-    safe = strategy_key.replace("/", "_").replace("\\", "_")
-    csv_path = PROCESSED_DIR / f"{safe}.csv"
-    if not csv_path.exists():
-        return None
-
-    try:
-        raw = pd.read_csv(csv_path)
-    except Exception:
-        return None
-
-    required = {"trade_time", "cash_balance", "posi_balance", "posi_vwap", "symbol", "btype", "volume"}
-    if not required.issubset(raw.columns):
-        return None
-
-    # Filter out summary/header rows embedded in the CSV
-    raw = raw[~raw["symbol"].astype(str).str.contains("以上是", na=False)]
-    raw = raw[~raw["trade_time"].astype(str).str.contains("以上是", na=False)]
-    raw = raw.dropna(subset=["trade_time", "symbol", "btype"])
-    if len(raw) < 5:
-        return None
-
-    raw = raw.sort_values("trade_time").reset_index(drop=True)
-    raw["trade_time"] = pd.to_datetime(raw["trade_time"])
-
-    # Track per-symbol positions: {symbol: (shares, last_price)}
-    positions: dict[str, list[float, float]] = {}
-    equity_rows = []
-
-    for _, row in raw.iterrows():
-        try:
-            cash = float(row["cash_balance"])
-            symbol = str(row["symbol"])
-            btype = str(row["btype"])
-        except (ValueError, TypeError):
-            continue
-        try:
-            volume = float(row["volume"])
-            price = float(row["vwap"]) if pd.notna(row.get("vwap")) else float(row["order_price"])
-        except (ValueError, TypeError):
-            continue
-
-        # Skip non-trade events
-        if btype == "银证转入":
-            continue
-
-        # Update per-symbol position
-        if volume > 0:  # buy to open
-            old_shares, old_price = positions.get(symbol, (0.0, price))
-            new_shares = old_shares + volume
-            new_price = (old_shares * old_price + volume * price) / new_shares if new_shares > 0 else price
-            positions[symbol] = [new_shares, new_price]
-        elif volume < 0:  # sell to close
-            old_shares, old_price = positions.get(symbol, (0.0, 0.0))
-            new_shares = max(0.0, old_shares + volume)  # volume is negative
-            positions[symbol] = [new_shares, old_price]
-
-        # Mark all open positions to most recent fill price for this symbol
-        positions[symbol][1] = price  # update last known price
-
-        # Total market value of all positions
-        total_mv = sum(shares * lp for shares, lp in positions.values())
-        equity = cash + total_mv
-
-        equity_rows.append({
-            "trade_time": row["trade_time"],
-            "equity": equity,
-            "open_positions": len([s for s, (sh, _) in positions.items() if sh > 0]),
-        })
-
-    if len(equity_rows) < 5:
-        return None
-
-    equity_df = pd.DataFrame(equity_rows)
-    equity_df["trade_date"] = equity_df["trade_time"].dt.date
-
-    # Last observation per day
-    daily = equity_df.groupby("trade_date").last().reset_index()
-    daily["trade_date"] = pd.to_datetime(daily["trade_date"])
-    daily = daily.sort_values("trade_date").reset_index(drop=True)
-    daily["nav"] = daily["equity"]
-    daily["daily_return"] = daily["nav"].pct_change()
-
-    return daily[["trade_date", "nav", "daily_return"]]
-
-
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -258,10 +166,7 @@ def main():
             except Exception:
                 pass
 
-        # Fall back: old MTM rebuild from raw trade CSV (no pre-computed NAV)
-        if daily_df is None:
-            daily_df = rebuild_daily_returns(key)
-
+        # No fallback — pre-computed NAV must exist (from rebuild_mtm_nav.py or build_all_strategies.py)
         if daily_df is None or len(daily_df) < MIN_TRADING_DAYS:
             print(f"  {key:30s}  SKIP (no viable NAV source or < {MIN_TRADING_DAYS} days)")
             continue
