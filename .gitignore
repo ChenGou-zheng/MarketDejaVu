@@ -20,7 +20,6 @@ Thumbs.db
 uv.lock
 
 # Output (generated data, figures, etc.)
-output/
 
 # Data (large generated files)
 

@@ -1,0 +1,2 @@
+﻿start_date,end_date,trading_days,total_excess_return,annualized_excess_return,tracking_error_annual,information_ratio,max_drawdown,sharpe_annual,deflated_z,deflated_p_value,excess_skew,excess_kurtosis,n_trials,system_significant_at_5pct
+2016-03-04,2026-04-30,2650,13.51%,1.21%,24.89%,0.049,68.95%,0.1713,7.2384,0.0000,1.3606,17.3832,34,YES

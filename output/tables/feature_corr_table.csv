@@ -1,0 +1,17 @@
+﻿rank,feature,category,mean_abs_r,max_abs_r,weight
+1,realized_vol_20d,Vol/Risk,0.0923,0.2866,1.0
+2,momentum_20d,Momentum,0.0862,0.3425,1.0
+3,up_down_ratio,Technical,0.0857,0.2505,0.8
+4,margin_balance,Capital Flow,0.0785,0.2970,1.0
+5,max_dd_60d,Vol/Risk,0.0773,0.2811,1.0
+6,cpi_yoy,Macro,0.0759,0.2462,1.5
+7,skew_20d,Technical,0.0727,0.3034,0.8
+8,rsi_14,Technical,0.0699,0.2628,0.8
+9,pmi_mfg,Macro,0.0696,0.2293,1.5
+10,recovery_days,Technical,0.0693,0.2851,0.8
+11,yield_slope,Capital Flow,0.0675,0.1800,1.0
+12,ma5_above_ma20,Technical,0.0664,0.2057,0.8
+13,momentum_60d,Momentum,0.0650,0.2151,1.0
+14,ppi_yoy,Macro,0.0629,0.3037,1.5
+15,m2_yoy,Macro,0.0561,0.3184,1.5
+16,net_total,Capital Flow,0.0368,0.0989,1.0
