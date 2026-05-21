@@ -79,18 +79,48 @@ output/
 ## 快速复现
 
 ```bash
+# 0. 环境
 pip install uv && uv sync
 
-# 1-4. 数据管线
-uv run python src/data/fetcher.py              # 拉取 ETF/指数/宏观
-uv run python src/data/preprocess.py           # 日频对齐
-uv run python src/features/rebuild_mtm_nav.py  # MTM 净值重建
-uv run python src/features/build_all_strategies.py  # ETF/映射策略
+# 1. 拉取 ETF/指数行情 (首次, 后续缓存)
+uv run python src/data/fetcher.py
 
-# 5-7. 特征+匹配+回测
-uv run python src/features/build_snapshot.py      # 特征+标签
-uv run python src/models/similarity_engine.py      # KNN + FDR
-uv run python src/backtest/dynamic_backtest.py --top-k 3  # 回测
+# 2. 日频数据整合
+uv run python src/data/preprocess.py
+
+# 3. 提取持仓股票代码清单 (仅首次, 用于 MTM 净值重建)
+uv run python -c "
+from pathlib import Path; import pandas as pd, json
+codes = set()
+for f in Path('data/processed').glob('交易记录*.csv'):
+    df = pd.read_csv(f)
+    if 'symbol' not in df.columns: continue
+    for s in df['symbol'].dropna().unique():
+        s = str(s).strip()
+        if s and '以上は' not in s: codes.add(s)
+rq = [c.replace('SHSE.','')+'.XSHG' if c.startswith('SHSE.') else c.replace('SZSE.','')+'.XSHE' for c in codes]
+rq = [c for c in rq if not c.startswith(('900','200'))]
+with open('data/external/stock_codes.json','w') as f: json.dump(rq, f)
+print(f'{len(rq)} stock codes')
+"
+
+# 4. 拉取个股日行情 (仅首次, 后续缓存)
+uv run python -c "from src.data.fetcher import fetch_stock_prices; fetch_stock_prices()"
+
+# 5. MTM 净值重建 (rqdata 收盘价, 含间隙检查+质量过滤)
+uv run python src/features/rebuild_mtm_nav.py
+
+# 6. 构建 ETF/映射策略 NAV
+uv run python src/features/build_all_strategies.py
+
+# 7. 无泄露特征+标签库
+uv run python src/features/build_snapshot.py
+
+# 8. KNN 相似度匹配 + FDR 检验
+uv run python src/models/similarity_engine.py
+
+# 9. 动态回测 (推荐: K=3)
+uv run python src/backtest/dynamic_backtest.py --top-k 3
 ```
 
 ---
@@ -101,9 +131,37 @@ uv run python src/backtest/dynamic_backtest.py --top-k 3  # 回测
 |------|:-----:|:-----:|:-------:|:-:|:-----:|:-------:|
 | v2.4 基线 | 34 | 1 | +6.67% | 0.272 | 53.4% | 48.21% |
 | v3.1 Top-K | 58 | **3** | +2.41% | 0.143 | 52.6% | 38.85% |
+| **v4.1 修复后全池** | **90** | **3** | **+23.66%** | **0.311** | 50.4% | 31.43% |
 | **v4.3 去重全池** | **37** | **3** | **+27.80%** | **0.364** | 49.6% | 32.69% |
 
-详细实验对比和基线分析见 `report.md`。
+### 4 组实验对比 (质量过滤正交)
+
+| 实验 | 策略 | 质量控制 | 年化超额 | DSR |
+|------|------|:-------:|:-------:|:---:|
+| **A: 纯 MTM** | 31 MTM | ON | +24.44% | **0.0048** |
+| **B: 纯 MTM** | 31 MTM | **OFF** | **+259.72%** (虚假) | 0.0000 |
+| **C: 全池** | 31 MTM+20 映射+3 ETF | ON | +24.44% | 0.0048 |
+| **D: 全池** | 31 MTM+20 映射+3 ETF | **OFF** | **+259.72%** (虚假) | 0.0000 |
+
+> 关键: A = C, B = D → 非 MTM 策略未被选中, 超额全部来自 MTM。质量过滤 ON 可获 ~+24.44% 年化且 DSR 显著。
+
+### 基线对比
+
+| 基线 | 年化超额 | 块胜率 |
+|------|:-------:|:-----:|
+| 随机选择 | ~0% | ~50% |
+| 等权持有全部 | +5.31% | **56.0%** |
+| 最佳单一策略 | +11.50% | 50.0% |
+| **KNN 系统 (v4.0 K=3)** | **+23.66%** | 50.4% |
+
+### 消融实验 (核心结论)
+
+| 池 | KNN 超额 | EW 超额 | KNN > EW? |
+|----|:-------:|:-------:|:---------:|
+| MTM-filtered | -6%~-61% | +26%~+43% | ❌ |
+| MTM-filtered+ETF | +3%~+17% | +20%~+31% | ❌ |
+
+质量过滤后, KNN 选择未能稳定战胜简单等权持有。详见 `report.md` 消融实验章节。
 
 ---
 
@@ -227,7 +285,9 @@ uv run python src/visualize/run_all.py
 | Tag | 说明 |
 |-----|------|
 | v4.3 | 去重全池 37 策略, +27.80% 年化超额 |
-| v4.0 | rqdata MTM 重建 + 全池 |
-| v3.1 | Top-K 分散, K=3 |
+| v4.1 | rqdata MTM 重建 + 90 策略全池, +23.66% 年化超额 |
+| v4.0 | rqdata 个股收盘价 MTM 重建 + 63 策略全池 |
+| v3.1 | Top-K 分散, K=3 最优 |
+| v3.0 | 统一策略定义 + 删除 v1 过时代码 |
 | v2.4 | KNN + N=20 块持有 (基线) |
-| v1.x | HMM 状态推断 (已废弃) |
+| v1.x | HMM 状态推断 + XGBoost (已废弃) |
